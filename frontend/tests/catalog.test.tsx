@@ -285,9 +285,12 @@ describe("catalog browsing", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("hides stale results after a changed-filter API error and renders authoritative validation details", async () => {
-    mockRequests((url) =>
-      url.searchParams.has("q")
+  it("handles the casefold-expanded query boundary and recovers by editing or resetting", async () => {
+    const accepted = "ß".repeat(50);
+    const rejected = "ß".repeat(51);
+    const acceptedProduct = { ...product, title: "Boundary Chair" };
+    const fetchMock = mockRequests((url) =>
+      url.searchParams.get("q") === rejected
         ? response(
             {
               error: {
@@ -303,22 +306,71 @@ describe("catalog browsing", () => {
             },
             400,
           )
-        : response(catalog()),
+        : response(
+            catalog(
+              url.searchParams.get("q") === accepted
+                ? [acceptedProduct]
+                : [product],
+            ),
+          ),
     );
     const { user } = setup();
     await screen.findByRole("heading", { name: "Cove Chair" });
-    await user.type(screen.getByLabelText("Search furniture"), "ß".repeat(60));
+    const search = screen.getByLabelText("Search furniture");
+    await user.type(search, accepted);
+    await user.keyboard("{Enter}");
+    await screen.findByRole("heading", { name: "Boundary Chair" });
+    expect(currentQuery().get("q")).toBe(accepted);
+    expect(
+      screen.queryByRole("heading", { name: "Cove Chair" }),
+    ).not.toBeInTheDocument();
+    expect(
+      new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost")
+        .searchParams.get("q"),
+    ).toBe(accepted);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.type(search, "ß");
     await user.keyboard("{Enter}");
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "q: Use no more than 100 normalized characters.",
     );
+    expect(currentQuery().get("q")).toBe(rejected);
+    expect(search).toHaveValue(rejected);
+    expect(
+      new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost")
+        .searchParams.get("q"),
+    ).toBe(rejected);
     expect(
       screen.queryByRole("list", { name: "Products" }),
     ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("heading", { name: "Cove Chair" }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("heading", { name: "Boundary Chair" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByText("Results unavailable")).toBeVisible();
+    expect(screen.queryByText("1 product")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Retry" }),
+    ).not.toBeInTheDocument();
+
+    await user.type(search, "{Backspace}{Enter}");
+    await screen.findByRole("heading", { name: "Boundary Chair" });
+    expect(currentQuery().get("q")).toBe(accepted);
+    expect(search).toHaveValue(accepted);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    await user.type(search, "ß{Enter}");
+    const error = await screen.findByRole("alert");
+    await user.click(
+      within(error).getByRole("button", { name: "Reset filters" }),
+    );
+    await screen.findByRole("heading", { name: "Cove Chair" });
+    expect(currentQuery().size).toBe(0);
+    expect(search).toHaveValue("");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("hides prior rows and counts when a category refresh fails", async () => {

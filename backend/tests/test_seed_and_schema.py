@@ -1,3 +1,4 @@
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,10 @@ def test_seed_is_exact_and_repeatable_across_databases(engine: Engine, tmp_path:
         assert seed_database(second_engine) == 144
         assert rows(engine) == rows(second_engine) == seed_records()
         assert len({row["slug"] for row in rows(engine)}) == 144
+        assert all(
+            len(row["slug"]) <= 80 and re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", row["slug"])
+            for row in rows(engine)
+        )
         assert {row["illustration_key"] for row in rows(engine)} == {
             "bed-01",
             "chair-01",
@@ -124,6 +129,48 @@ def test_orm_edits_update_normalized_fields(
         assert updated is not None
         assert updated.title_sort_key == "kuru"
         assert updated.search_text == normalize_text("  ＫＵＲＵ  QUIET\tRoom")
+
+
+@pytest.mark.parametrize("slug", ["a", "9", "a-chair-012", "a" * 80])
+def test_orm_accepts_valid_slug_without_rewriting_it(
+    add_product: Callable[..., Product], slug: str
+) -> None:
+    assert add_product(slug=slug).slug == slug
+
+
+@pytest.mark.parametrize(
+    "slug",
+    [
+        "",
+        "a" * 81,
+        "Uppercase-chair",
+        "straße-chair",
+        "ｆｕｌｌｗｉｄｔｈ-chair",
+        "-chair",
+        "chair-",
+        "chair--001",
+        "chair 001",
+        "chair_001",
+        "chair–001",
+        "chair\x00-001",
+    ],
+)
+@pytest.mark.parametrize("operation", ["insert", "update"])
+def test_orm_rejects_invalid_slugs_atomically(
+    engine: Engine, add_product: Callable[..., Product], slug: str, operation: str
+) -> None:
+    if operation == "update":
+        add_product()
+    before = rows(engine)
+    with pytest.raises(ValueError, match="Slug must contain"):
+        if operation == "insert":
+            add_product(slug=slug)
+        else:
+            with Session(engine) as session, session.begin():
+                product = session.get(Product, 1)
+                assert product is not None
+                product.slug = slug
+    assert rows(engine) == before
 
 
 @pytest.mark.parametrize(

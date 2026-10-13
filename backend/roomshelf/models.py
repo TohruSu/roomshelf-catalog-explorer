@@ -4,6 +4,7 @@ from sqlalchemy import CheckConstraint, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from .normalization import normalize_text
+from .slugs import validate_slug
 
 Category = Literal["bed", "chair", "desk", "sofa", "storage", "table"]
 Material = Literal["fabric", "glass", "metal", "mixed", "wood"]
@@ -92,6 +93,7 @@ class Product(Base):
 @event.listens_for(Product, "before_insert")
 @event.listens_for(Product, "before_update")
 def normalize_product(_mapper: object, _connection: object, product: Product) -> None:
+    validate_slug(product.slug)
     product.title_sort_key = normalize_text(product.title)
     product.search_text = normalize_text(f"{product.title} {product.description}")
 

@@ -64,6 +64,8 @@ export function parseCatalogQuery(params: URLSearchParams): ParsedQuery {
       issues.push({ field: key, message: "Use this parameter only once." });
   }
   const q = normalizeSearch(params.get("q") ?? "");
+  // The API also casefolds text, which can expand characters such as ß.
+  // This client check is preliminary; the API's normalized limit is authoritative.
   if ([...q].length > 100)
     issues.push({ field: "q", message: "Use no more than 100 characters." });
   if (q && q.split(" ").length > 8)
