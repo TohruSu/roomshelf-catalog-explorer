@@ -610,7 +610,7 @@ describe("shortlist interactions", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("keeps a pending save disabled across route changes and waits for confirmed membership", async () => {
+  it("keeps a pending save unavailable across route changes and waits for confirmed membership", async () => {
     let resolveWrite: ((value: Response) => void) | undefined;
     let confirmed = false;
     const fetchMock = mockApi((url, init) => {
@@ -633,7 +633,7 @@ describe("shortlist interactions", () => {
     );
     expect(
       screen.getByRole("button", { name: "Save Cove Chair to shortlist" }),
-    ).toBeDisabled();
+    ).toHaveAttribute("aria-disabled", "true");
     expect(
       screen.getByRole("button", { name: "Save Cove Chair to shortlist" }),
     ).toHaveTextContent("Updating…");
@@ -642,7 +642,7 @@ describe("shortlist interactions", () => {
     const detailSave = screen.getByRole("button", {
       name: "Save Cove Chair to shortlist",
     });
-    expect(detailSave).toBeDisabled();
+    expect(detailSave).toHaveAttribute("aria-disabled", "true");
     await user.click(detailSave);
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method === "POST"),

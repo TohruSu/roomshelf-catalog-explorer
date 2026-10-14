@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { ApiError, getJson } from "../api/client";
 import type { Product, ProductDetail } from "../api/types";
@@ -7,6 +7,7 @@ import { ProductVisual } from "../components/ProductVisual";
 import { availabilityLabels, formatPrice } from "../catalog/display";
 import { ShortlistFeedback } from "../components/ShortlistFeedback";
 import { useCompare } from "../state/CompareProvider";
+import { usePageNavigation } from "../navigation/usePageNavigation";
 
 type Column = {
   selected: Product;
@@ -16,11 +17,50 @@ type Column = {
 
 export function ComparePage() {
   const compare = useCompare();
+  usePageNavigation("Compare Products | RoomShelf");
+  const removeButtons = useRef(new Map<number, HTMLButtonElement>());
+  const emptyAction = useRef<HTMLAnchorElement>(null);
+  const pendingFocus = useRef<{
+    source: HTMLButtonElement;
+    nextId: number | null;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    pendingFocus.current = null;
+    if (
+      document.activeElement !== pending.source &&
+      (pending.source.isConnected || document.activeElement !== document.body)
+    )
+      return;
+    const destination =
+      pending.nextId === null
+        ? emptyAction.current
+        : removeButtons.current.get(pending.nextId);
+    destination?.focus({ preventScroll: true });
+  }, [compare.products]);
+
+  function toggleComparison(product: Product, button: HTMLButtonElement) {
+    if (compare.isSelected(product.id) && document.activeElement === button) {
+      const index = compare.products.findIndex(
+        (item) => item.id === product.id,
+      );
+      const next = compare.products[index + 1] ?? compare.products[index - 1];
+      pendingFocus.current = { source: button, nextId: next?.id ?? null };
+    }
+    compare.toggle(product);
+  }
+
   return (
-    <main id="main-content" className="collection-main compare-main">
+    <main
+      id="main-content"
+      className="collection-main compare-main"
+      tabIndex={-1}
+    >
       <section className="collection-intro">
         <p className="eyebrow">02 / Side by side</p>
-        <h1>Compare the details</h1>
+        <h1 tabIndex={-1}>Compare the details</h1>
         <p>
           Up to three individual pieces. This selection clears when you reload.
         </p>
@@ -33,29 +73,49 @@ export function ComparePage() {
             Add products from the catalog to compare their dimensions and
             details.
           </p>
-          <Link className="button primary" to="/products">
+          <Link
+            className="button primary"
+            to="/products"
+            ref={emptyAction}
+            data-compare-empty-action
+          >
             Browse the catalog
           </Link>
         </section>
       ) : (
         <CompareTable
-          key={compare.products
-            .map((product) => `${product.id}:${product.slug}`)
-            .join(",")}
           selected={compare.products}
+          removeButtons={removeButtons.current}
+          onCompareToggle={toggleComparison}
         />
       )}
     </main>
   );
 }
 
-function CompareTable({ selected }: { selected: Product[] }) {
+function CompareTable({
+  selected,
+  removeButtons,
+  onCompareToggle,
+}: {
+  selected: Product[];
+  removeButtons: Map<number, HTMLButtonElement>;
+  onCompareToggle: (product: Product, button: HTMLButtonElement) => void;
+}) {
   const [attempt, setAttempt] = useState(0);
   const [columns, setColumns] = useState<Column[] | null>(null);
+  // Keep surviving columns mounted so removal preserves focus and table scroll.
+  const loadedColumns = useRef(new Map<number, Column>());
   useEffect(() => {
     const controller = new AbortController();
+    const selectedIds = new Set(selected.map((product) => product.id));
+    for (const id of loadedColumns.current.keys())
+      if (!selectedIds.has(id)) loadedColumns.current.delete(id);
     void Promise.all(
       selected.map(async (product): Promise<Column> => {
+        const loaded = loadedColumns.current.get(product.id);
+        if (loaded?.selected.slug === product.slug)
+          return { ...loaded, selected: product };
         try {
           const result = await getJson<{ data: ProductDetail }>(
             `/api/products/${encodeURIComponent(product.slug)}`,
@@ -74,7 +134,12 @@ function CompareTable({ selected }: { selected: Product[] }) {
         }
       }),
     ).then((data) => {
-      if (!controller.signal.aborted) setColumns(data);
+      if (!controller.signal.aborted) {
+        loadedColumns.current = new Map(
+          data.map((column) => [column.selected.id, column]),
+        );
+        setColumns(data);
+      }
     });
     return () => controller.abort();
   }, [selected, attempt]);
@@ -105,9 +170,16 @@ function CompareTable({ selected }: { selected: Product[] }) {
         Loading comparison details…
       </p>
     );
+  const visibleColumns = columns.filter((column) =>
+    selected.some(
+      (product) =>
+        product.id === column.selected.id &&
+        product.slug === column.selected.slug,
+    ),
+  );
   return (
     <>
-      {columns.some((column) => column.error) && (
+      {visibleColumns.some((column) => column.error) && (
         <div className="metadata-error" role="alert">
           <p>
             Some products could not be loaded. Remove an unavailable piece or
@@ -116,6 +188,7 @@ function CompareTable({ selected }: { selected: Product[] }) {
           <button
             className="text-button"
             onClick={() => {
+              loadedColumns.current.clear();
               setColumns(null);
               setAttempt((value) => value + 1);
             }}
@@ -135,29 +208,36 @@ function CompareTable({ selected }: { selected: Product[] }) {
           <thead>
             <tr>
               <th scope="col">Specification</th>
-              {columns.map(({ selected: product, product: detail, error }) => (
-                <th scope="col" key={product.id}>
-                  {detail && <ProductVisual product={detail} />}
-                  <Link
-                    className="compare-product-link"
-                    to={`/products/${product.slug}`}
-                  >
-                    {detail?.title ?? product.title}
-                  </Link>
-                  {error && <p className="comparison-error">{error}</p>}
-                  <ProductActions
-                    product={detail ?? product}
-                    allowSave={detail !== null}
-                  />
-                </th>
-              ))}
+              {visibleColumns.map(
+                ({ selected: product, product: detail, error }) => (
+                  <th scope="col" key={product.id}>
+                    {detail && <ProductVisual product={detail} />}
+                    <Link
+                      className="compare-product-link"
+                      to={`/products/${product.slug}`}
+                    >
+                      {detail?.title ?? product.title}
+                    </Link>
+                    {error && <p className="comparison-error">{error}</p>}
+                    <ProductActions
+                      product={detail ?? product}
+                      allowSave={detail !== null}
+                      compareButtonRef={(button) => {
+                        if (button) removeButtons.set(product.id, button);
+                        else removeButtons.delete(product.id);
+                      }}
+                      onCompareToggle={onCompareToggle}
+                    />
+                  </th>
+                ),
+              )}
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => (
               <tr key={row.label}>
                 <th scope="row">{row.label}</th>
-                {columns.map((column) => (
+                {visibleColumns.map((column) => (
                   <td key={column.selected.id}>
                     {column.product ? row.value(column.product) : "Unavailable"}
                   </td>

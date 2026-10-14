@@ -1,4 +1,4 @@
-import { parseCatalogQuery } from "./query";
+import { parseCatalogQuery, serializeCatalogQuery } from "./query";
 
 export function catalogReturnPath(value: unknown): string {
   if (
@@ -13,12 +13,14 @@ export function catalogReturnPath(value: unknown): string {
   } catch {
     return "/products";
   }
+  const parsed = parseCatalogQuery(url.searchParams);
   if (
     url.origin !== "http://roomshelf.local" ||
     url.pathname !== "/products" ||
     url.hash ||
-    !parseCatalogQuery(url.searchParams).ok
+    !parsed.ok
   )
     return "/products";
-  return `${url.pathname}${url.search}`;
+  const search = serializeCatalogQuery(parsed.query).toString();
+  return `/products${search ? `?${search}` : ""}`;
 }
