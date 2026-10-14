@@ -29,7 +29,8 @@ export interface CatalogQuery {
   page_size: number;
 }
 export type ParsedQuery =
-  { ok: true; query: CatalogQuery } | { ok: false; issues: FieldIssue[] };
+  | { ok: true; query: CatalogQuery }
+  | { ok: false; issues: FieldIssue[] };
 export const defaultQuery: CatalogQuery = {
   q: "",
   category: [],

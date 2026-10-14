@@ -16,7 +16,11 @@ from roomshelf.models import Product
 @pytest.fixture
 def app(tmp_path: Path) -> Iterator[Flask]:
     application = create_app(
-        {"TESTING": True, "DATABASE_URL": f"sqlite:///{tmp_path / 'catalog.sqlite3'}"}
+        {
+            "TESTING": True,
+            "DATABASE_URL": f"sqlite:///{tmp_path / 'catalog.sqlite3'}",
+            "SECRET_KEY": "test-only-key-not-for-deployment-0123456789",
+        }
     )
     engine: Engine = application.extensions["roomshelf_engine"]
     initialize_database(engine)

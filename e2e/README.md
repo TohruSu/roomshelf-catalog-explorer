@@ -2,6 +2,8 @@
 
 The browser suite uses real Flask, SQLite, and built React pages. Each run creates and seeds a temporary database, starts Flask on port 5000 and Vite preview on port 4173, and removes the database when the server exits. Both ports must be available. Browser requests to other origins are blocked and reported as failures.
 
+Checks cover catalog filtering and navigation, product details, the three-product comparison limit, mobile keyboard interactions, and anonymous shortlist persistence and isolation. Session tests exercise simultaneous first-use tabs, one-time CSRF refresh, cancellation when a session changes, and reconciliation after a save response is lost. The harness generates a temporary signing key and uses the preview origin for mutation checks; neither the key nor test memberships persist after a run.
+
 Install the backend dependencies in `backend/.venv` and frontend dependencies as described in the root README, then run from this directory:
 
 ```sh

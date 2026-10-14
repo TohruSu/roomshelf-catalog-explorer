@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -10,6 +11,9 @@ const temporaryDirectory = mkdtempSync(join(tmpdir(), 'roomshelf-e2e-'));
 const environment = {
   ...process.env,
   ROOMSHELF_DATABASE_URL: `sqlite:///${join(temporaryDirectory, 'catalog.sqlite3')}`,
+  ROOMSHELF_SECRET_KEY: randomBytes(32).toString('hex'),
+  ROOMSHELF_PUBLIC_ORIGIN: 'http://127.0.0.1:4173',
+  ROOMSHELF_ENV: 'development',
 };
 
 for (const command of ['init-db', 'seed']) {

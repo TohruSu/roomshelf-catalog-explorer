@@ -240,9 +240,10 @@ def test_get_bodies_and_framework_errors_use_envelope(client: FlaskClient) -> No
     assert "GET" in wrong_method.headers["Allow"]
 
 
-@pytest.mark.parametrize("path", ["/api/session", "/api/shortlist", "/api/products/some-chair"])
-def test_future_endpoints_absent(client: FlaskClient, path: str) -> None:
-    assert client.get(path).status_code == 404
+def test_detail_for_unknown_product(client: FlaskClient) -> None:
+    response = client.get("/api/products/some-chair")
+    assert response.status_code == 404
+    assert response.json["error"]["code"] == "product_not_found"
 
 
 def test_database_failure_has_no_sensitive_details(tmp_path: Path) -> None:

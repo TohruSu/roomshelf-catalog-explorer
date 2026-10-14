@@ -5,11 +5,27 @@ from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from .db import SchemaMismatch, check_schema, get_engine
-from .errors import ApiError
+from .errors import ApiError, invalid_request
 from .models import Product
+from .slugs import validate_slug
 from .validation import parse_catalog_query, validate_no_query
 
 api = Blueprint("catalog", __name__, url_prefix="/api")
+
+
+@api.get("/products/<path:slug>")
+def product_detail(slug: str) -> Response:
+    validate_no_query()
+    try:
+        validate_slug(slug)
+    except ValueError as error:
+        raise invalid_request("slug", str(error)) from error
+    with Session(get_engine()) as database, database.begin():
+        product = database.scalar(select(Product).where(Product.slug == slug))
+        if product is None:
+            raise ApiError(404, "product_not_found", "Product was not found.")
+        data = {**product_summary(product), "description": product.description}
+    return jsonify(data=data)
 
 
 def product_summary(product: Product) -> dict[str, Any]:
