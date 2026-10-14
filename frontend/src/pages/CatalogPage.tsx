@@ -11,6 +11,7 @@ import {
 import type { CatalogQuery, Sort } from "../catalog/query";
 import { FilterPanel } from "../components/FilterPanel";
 import { ProductCard } from "../components/ProductCard";
+import { ShortlistFeedback } from "../components/ShortlistFeedback";
 
 export function CatalogPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -84,6 +85,7 @@ export function CatalogPage() {
           </p>
         </div>
       </section>
+      <ShortlistFeedback />
       {!parsed.ok ? (
         <section className="request-state invalid-state" role="alert">
           <p className="eyebrow">Check your filters</p>

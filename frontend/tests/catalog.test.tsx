@@ -43,6 +43,19 @@ function response(data: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
   });
 }
+function shortlistRequest(url: URL): Response | undefined {
+  if (url.pathname === "/api/session")
+    return response({
+      data: {
+        session_ref: "catalog-test-session",
+        csrf_token: "catalog-test-token",
+        csrf_expires_at: "2026-10-15T01:00:00.000000Z",
+        session_expires_at: "2026-11-14T00:00:00.000000Z",
+      },
+    });
+  if (url.pathname === "/api/shortlist")
+    return response({ data: [], meta: { total: 0 } });
+}
 function mockRequests(
   productRequest: (url: URL) => Response | Promise<Response> = () =>
     response(catalog()),
@@ -51,6 +64,8 @@ function mockRequests(
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/filters")
       return Promise.resolve(response({ data: filters }));
+    const shortlist = shortlistRequest(url);
+    if (shortlist) return Promise.resolve(shortlist);
     return Promise.resolve(productRequest(url));
   });
   vi.stubGlobal("fetch", mock);
@@ -88,7 +103,7 @@ function currentQuery() {
 }
 
 describe("catalog browsing", () => {
-  it("redirects the index, renders local illustrations and specifications, and omits unimplemented product actions", async () => {
+  it("redirects the index and renders local illustrations, specifications, and product actions", async () => {
     mockRequests();
     setup("/");
     expect(
@@ -106,8 +121,19 @@ describe("catalog browsing", () => {
         /^(?:\/src\/assets\/illustrations\/chair-01\.svg|data:image\/svg\+xml)/u,
       ),
     );
-    expect(within(list).queryByRole("button")).not.toBeInTheDocument();
-    expect(within(list).queryByRole("link")).not.toBeInTheDocument();
+    expect(
+      within(list).getByRole("button", {
+        name: "Save Cove Chair to shortlist",
+      }),
+    ).toBeVisible();
+    expect(
+      within(list).getByRole("button", {
+        name: "Add Cove Chair to comparison",
+      }),
+    ).toBeVisible();
+    expect(
+      within(list).getByRole("link", { name: "Cove Chair" }),
+    ).toHaveAttribute("href", "/products/cove-chair-001");
   });
 
   it("hydrates controls from a canonical URL and applies repeated facets without submitting search drafts", async () => {
@@ -207,7 +233,9 @@ describe("catalog browsing", () => {
     );
     expect(
       fetchMock.mock.calls.every(([input]) =>
-        String(input).includes("/api/filters"),
+        ["/api/filters", "/api/session", "/api/shortlist"].includes(
+          String(input),
+        ),
       ),
     ).toBe(true);
     await user.click(screen.getByRole("button", { name: "Reset filters" }));
@@ -325,8 +353,10 @@ describe("catalog browsing", () => {
       screen.queryByRole("heading", { name: "Cove Chair" }),
     ).not.toBeInTheDocument();
     expect(
-      new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost")
-        .searchParams.get("q"),
+      new URL(
+        String(fetchMock.mock.calls.at(-1)?.[0]),
+        "http://localhost",
+      ).searchParams.get("q"),
     ).toBe(accepted);
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
@@ -338,8 +368,10 @@ describe("catalog browsing", () => {
     expect(currentQuery().get("q")).toBe(rejected);
     expect(search).toHaveValue(rejected);
     expect(
-      new URL(String(fetchMock.mock.calls.at(-1)?.[0]), "http://localhost")
-        .searchParams.get("q"),
+      new URL(
+        String(fetchMock.mock.calls.at(-1)?.[0]),
+        "http://localhost",
+      ).searchParams.get("q"),
     ).toBe(rejected);
     expect(
       screen.queryByRole("list", { name: "Products" }),
@@ -401,6 +433,8 @@ describe("catalog browsing", () => {
         const url = new URL(String(input), "http://localhost");
         if (url.pathname === "/api/filters")
           return Promise.resolve(response({ data: filters }));
+        const shortlist = shortlistRequest(url);
+        if (shortlist) return Promise.resolve(shortlist);
         if (!url.searchParams.has("category"))
           return Promise.resolve(response(catalog()));
         if (init?.signal) signals.push(init.signal);
@@ -439,12 +473,22 @@ describe("catalog browsing", () => {
     ).toBeVisible();
   });
 
-  it("shows a not-found page without treating unimplemented detail paths as implemented", () => {
+  it("shows a not-found page for unknown frontend routes without requesting catalog data", async () => {
     const fetchMock = mockRequests();
-    setup("/products/cove-chair-001");
+    setup("/unknown-page");
     expect(
       screen.getByRole("heading", { name: "This page is off the shelf." }),
     ).toBeVisible();
-    expect(fetchMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/shortlist",
+        expect.anything(),
+      ),
+    );
+    expect(
+      fetchMock.mock.calls.every(([input]) =>
+        ["/api/session", "/api/shortlist"].includes(String(input)),
+      ),
+    ).toBe(true);
   });
 });

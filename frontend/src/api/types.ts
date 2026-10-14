@@ -17,6 +17,39 @@ export interface Product {
   illustration_key: string;
 }
 
+export interface ProductDetail extends Product {
+  description: string;
+}
+
+export interface ProductDetailResponse {
+  data: ProductDetail;
+}
+
+export interface Session {
+  session_ref: string;
+  csrf_token: string;
+  csrf_expires_at: string;
+  session_expires_at: string;
+}
+
+export interface SessionResponse {
+  data: Session;
+}
+
+export interface ShortlistItem {
+  product: Product;
+  added_at: string;
+}
+
+export interface ShortlistResponse {
+  data: ShortlistItem[];
+  meta: { total: number };
+}
+
+export interface SaveShortlistResponse {
+  data: { product_id: number; saved: true };
+}
+
 export interface Range {
   min: number | null;
   max: number | null;

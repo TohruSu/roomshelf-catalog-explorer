@@ -2,7 +2,7 @@ name: Catalog checks
 
 on:
   push:
-    branches: [main, feat/catalog-mvp]
+    branches: [main, feat/product-flows]
   pull_request:
   workflow_dispatch:
 
@@ -79,6 +79,8 @@ jobs:
       - run: npm ci
         working-directory: frontend
       - run: npm ci
+        working-directory: e2e
+      - run: npm audit --audit-level=moderate
         working-directory: e2e
       - run: npx playwright install --with-deps chromium
         working-directory: e2e
