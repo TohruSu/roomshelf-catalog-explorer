@@ -1,18 +1,54 @@
 # RoomShelf — Furniture Catalog Explorer
 
-A self-contained fictional furniture catalog with 144 products and original local illustrations. Browse by keyword, category, material, price, and maximum width, inspect individual products, compare up to three products, and keep an anonymous shortlist. Applied catalog filters stay in the URL for sharing and browser navigation.
+An independently developed furniture catalog with 144 fictional products and original, locally bundled illustrations. Explore individual pieces, compare specifications, and keep an anonymous shortlist without creating an account.
 
-Prices are whole Japanese yen (JPY), dimensions are centimetres (cm), and availability is fictional. There are no accounts, purchasing flows, or external runtime services.
+![RoomShelf desktop catalog with category and material filters, sorting, and illustrated furniture cards](docs/screenshots/desktop-catalog.png)
 
-## Requirements
+## What you can do
 
-- Python 3.12
-- Node.js 24 (the tested version is recorded in `.node-version`)
-- npm
+- Search and combine category, material, price, and width filters; sort and paginate results.
+- Open product details with descriptions, dimensions, availability, and whole-JPY prices.
+- Compare up to three products side by side; selections last for the current page session.
+- Save products to a browser-specific shortlist persisted in SQLite for 30 days from creation.
+- Share catalog URLs and use browser history without losing applied filters.
 
-## Run locally
+This is a software portfolio application, not a retailer. Products, prices, and availability are fictional; dimensions use centimetres. There are no accounts, purchases, uploads, recommendations, analytics, remote APIs, or external shopping links. Normal use needs no external network services.
 
-From the repository root, prepare the backend:
+## Stack and architecture
+
+| Layer | Technologies |
+| --- | --- |
+| Browser | React 19, TypeScript, Vite, React Router |
+| API | Python 3.12, Flask 3, Pydantic validation |
+| Persistence | SQLAlchemy 2, SQLite |
+| Verification | pytest, Ruff, mypy; Vitest, Testing Library, ESLint, Prettier; Playwright Chromium |
+| Automation | GitHub Actions, hashed Python locks, npm lockfiles, dependency advisory audits |
+
+Public catalog reads do not need a session. Comparison lives in React memory. Shortlist membership lives in SQLite and is selected only by a verified signed browser cookie. Development uses Vite's same-origin API proxy. The [architecture diagram and design decisions](docs/ARCHITECTURE.md) explain these boundaries and the hypothetical production requirements.
+
+## Engineering highlights
+
+- **Predictable queries:** applied filters belong to the URL; SQLite performs filtering, counting, ordering, and pagination. Every sort has an ID tie-breaker, and count/rows share a transaction snapshot.
+- **Safe writes:** transactional shortlist saves/removals are idempotent, with foreign keys and a composite membership key. Origin and session-bound CSRF checks precede mutation.
+- **Bounded recovery:** browser requests have a 10-second deadline, including response consumption. An uncertain mutation result triggers bounded reads to reconcile server state; the write is never automatically replayed. A confirmed CSRF rejection permits one refresh/retry for the same session.
+- **Intentional persistence:** sessions have a fixed 30-day expiry; initialization and ordinary seeding preserve existing products and memberships. Comparison and catalog return positions remain in memory.
+- **Accessible navigation:** route titles and focus, focus recovery after removals, keyboard controls, mobile filter disclosure, and zoom/reflow have regression tests. Automated checks do not establish full WCAG conformance or replace assistive-technology testing.
+
+## Screenshots
+
+These are unmodified browser captures of the running Flask/React application on a fresh deterministic seed. See [capture states and reproduction](docs/screenshots/README.md) for viewports and interactions.
+
+![Mobile RoomShelf catalog with filters collapsed and the first furniture card visible](docs/screenshots/mobile-catalog.png)
+
+![Arc Chair 01 product details with local artwork, JPY price, dimensions, and save and compare actions](docs/screenshots/product-details.png)
+
+![Three seeded chairs compared by price, dimensions, material, color, and availability](docs/screenshots/three-chair-comparison.png)
+
+## Quick start
+
+Requirements: **Python 3.12**, **Node.js 24** (tested patch in `.node-version`), and npm. Dependency installation requires Internet access; running the application requires no API keys.
+
+From the repository root, in one terminal:
 
 ```sh
 cd backend
@@ -23,7 +59,7 @@ python3.12 -m venv .venv
 .venv/bin/flask --app roomshelf run --host 127.0.0.1 --port 5000
 ```
 
-In another terminal, prepare and start the frontend:
+From the repository root, in another terminal:
 
 ```sh
 cd frontend
@@ -31,40 +67,11 @@ npm ci
 npm run dev
 ```
 
-Open the address printed by Vite. Its development server proxies `/api` to the backend. Both processes must run. Dependency installation needs Internet access; normal application use does not need external network access or API keys.
+Open `http://localhost:5173`. Both processes must run: Vite proxies `/api` to Flask on port 5000. Using another browser hostname/port requires a matching `ROOMSHELF_PUBLIC_ORIGIN`; see [configuration and persistence](docs/OPERATIONS.md).
 
-The default database is `backend/instance/catalog.sqlite3`, which is ignored by Git. To use another SQLite database, set `ROOMSHELF_DATABASE_URL` to an absolute URL such as `sqlite:////absolute/path/catalog.sqlite3` before initialization and startup.
+The ignored default database is `backend/instance/catalog.sqlite3`; development generates an ignored random signing key in `backend/instance/session-secret`. Keep both and the browser cookie to preserve shortlist access across restarts. Do not commit either file. Ordinary initialization/seeding are safe to repeat; they do not migrate incompatible schemas. Avoid `seed --reset` unless intentionally discarding the catalog and its dependent memberships.
 
-Development creates a random signing key in the ignored `backend/instance/session-secret` file. Keep that file and the database to preserve shortlist access after restarting the server. Alternatively, supply `ROOMSHELF_SECRET_KEY` through the process environment. Never commit signing secrets. Anonymous shortlists expire 30 days after creation; activity does not extend that deadline. Clearing the browser cookie or replacing the signing key loses access to that browser's previous shortlist. Comparison selections live in React memory and clear on reload.
-
-The default browser origin is `http://localhost:5173`. If using another hostname or port, set `ROOMSHELF_PUBLIC_ORIGIN` to the browser's canonical origin, with no trailing slash. Use lowercase ASCII hostnames, omit default ports (`:80` for HTTP and `:443` for HTTPS), and write other ports without leading zeroes. IPv6 addresses use brackets and their compressed lowercase form, for example `https://[2001:db8::1]:8443`. Internationalized names must use canonical `xn--` labels. Standard-library checks support a conservative subset of those names; contextual Unicode joiners are unsupported. Invalid or noncanonical configuration stops startup; the server does not normalize incoming Origin headers. The frontend and API must share a browser origin through the Vite proxy or an equivalent reverse proxy.
-
-For a production runtime, set `ROOMSHELF_ENV=production`, a stable random `ROOMSHELF_SECRET_KEY` of at least 32 characters, and an HTTPS `ROOMSHELF_PUBLIC_ORIGIN`. Missing or invalid production configuration stops startup. The production cookie is host-only, Secure, HttpOnly, and SameSite=Lax. Use a production WSGI server and serve the built frontend through the same HTTPS origin; Flask's development server is for local use.
-
-Production-mode tests use Flask's HTTPS request environment to verify startup validation, cookie flags, Origin/CSRF enforcement, and absolute session expiry. They do not establish a TLS connection or validate a deployed reverse proxy. Configure TLS termination, forwarded headers, stable signing-key storage, and SQLite storage/backup permissions for the chosen host before deployment. The API's `default-src 'none'` Content Security Policy applies only to `/api` responses; do not copy it onto the built React HTML served by the static server or proxy.
-
-Initialization and ordinary seeding preserve existing data. The seed inserts missing products and rejects conflicting identities without partial inserts. `seed --reset` explicitly replaces the catalog and removes dependent shortlist memberships; use it only when discarding that data is intended. Initialization does not migrate incompatible existing schemas.
-
-## API
-
-- `GET /api/health`: database/schema readiness.
-- `GET /api/filters`: catalog-wide categories, materials, and price/dimension bounds.
-- `GET /api/products`: validated filtering, sorting, and pagination.
-- `GET /api/products/{slug}`: description and complete specifications.
-- `GET /api/session`: anonymous session bootstrap and session-bound CSRF token.
-- `GET /api/shortlist`: saved products for the signed browser cookie.
-- `POST /api/shortlist/items`: idempotently save a product.
-- `DELETE /api/shortlist/items/{product_id}`: idempotently remove a product.
-
-See [the API reference](docs/API.md) for request shapes, security requirements, expiry, and recovery behavior.
-
-Browser API requests have a 10-second deadline covering the connection and response body. Session bootstrap also limits its wait for a browser lock to that deadline. A timeout leaves a mutation's commit result uncertain: the frontend reads the server's current shortlist without resending the write. Recovery reads have their own deadlines, so recovery can take longer than one request. If recovery fails, pending controls are released and the user can reload the shortlist before trying the action again.
-
-Catalog query parameters are `q`, repeatable `category` and `material`, `min_price`, `max_price`, `max_width`, `sort`, `page`, and `page_size`. Facet values combine with OR inside each facet and AND across facets. Numeric bounds are inclusive. Search requires each normalized term to occur literally in the title or description.
-
-Sort values are `featured`, `price_asc`, `price_desc`, and `title_asc`, with ascending product ID as the tie-breaker. Pages start at 1; page size defaults to 12 and is capped at 48. Responses distinguish the total matching count from the number of returned items. Unknown or invalid parameters return a structured JSON error.
-
-## Checks
+## Testing and CI
 
 Backend, from `backend`:
 
@@ -73,12 +80,18 @@ Backend, from `backend`:
 .venv/bin/ruff format --check .
 .venv/bin/mypy roomshelf
 .venv/bin/pytest
+.venv/bin/pip-audit --cache-dir .venv/audit-cache --strict --disable-pip --require-hashes \
+  --vulnerability-service pypi --progress-spinner off -r requirements-dev.txt
+.venv/bin/python ../scripts/check_docs.py
 ```
+
+`pip-audit` is pinned to 2.10.1 in the hash-locked development dependencies. The command audits every pinned runtime/development/transitive requirement against PyPI advisories without resolving a different environment. Strict mode rejects unauditable dependencies; vulnerabilities and advisory-service failures fail the check. A clean result is a point-in-time advisory result, not a security guarantee.
 
 Frontend, from `frontend`:
 
 ```sh
 npm run lint
+npm run format:check
 npm run typecheck
 npm test
 npm run build
@@ -86,8 +99,47 @@ npm audit
 npm audit --omit=dev
 ```
 
-Browser smoke instructions are in `e2e/README.md`. GitHub Actions runs backend, frontend, and browser checks against a fresh seeded database. Local test success and hosted CI results are separate outcomes.
+Prettier 3.6.2 checks `src/` and `tests/` using `frontend/.prettierrc.json`. Lockfiles, generated output, screenshots, and other directories are outside its scope. A violation fails `format:check`.
 
-## Structure
+Browser checks, from `e2e` after backend/frontend installation:
 
-`backend/roomshelf` contains the Flask application, SQLAlchemy models, validation, catalog queries, and initialization/seed commands. `frontend/src` contains the React catalog, URL/query handling, components, styles, and local SVG assets. Tests live beside their respective applications and in `e2e/`.
+```sh
+npm ci
+npm audit
+npx playwright install chromium
+npm test
+```
+
+On Linux, missing browser system libraries require `npx playwright install --with-deps chromium` where package installation is permitted. The [browser guide](e2e/README.md) describes ports, isolated data, browser overrides, and failure artifacts. The suite builds the frontend and starts its own servers; stop local servers on ports 5000 and 4173 first.
+
+GitHub Actions runs on **pushes to `main`**, **pull requests targeting `main`**, and **manual dispatch**. Backend and frontend checks precede browser tests against a fresh seed. Checkout credentials are not persisted and workflow permissions are read-only. Local checks and hosted CI are separate results.
+
+## Security and persistence
+
+- `/api/session` creates/reuses an anonymous session; personal reads never create one implicitly. Signed cookies are host-only, HttpOnly, SameSite=Lax; production also requires Secure and the `__Host-` prefix.
+- Every write requires the exact configured Origin and a valid session-bound CSRF token. Tokens stay in memory, expire within an hour, and never outlive the session. Personal responses use `no-store` and vary on Cookie.
+- Clearing cookies, replacing the signing key, or reaching the fixed expiry loses access to that shortlist. There is no account recovery. Activity does not extend expiry; expired rows have no automated cleanup command.
+- Timeouts do not roll back server transactions. Reconciliation reports the state at the time of its read; a later reload may observe a late commit. Failed recovery releases pending controls and requires a successful reload before another write.
+
+The [API reference](docs/API.md) contains exact request shapes, validation, errors, session creation, and recovery semantics. The [operations guide](docs/OPERATIONS.md) preserves configuration and production-mode security details.
+
+## Limits and deployment considerations
+
+The catalog and all illustrations are bundled; there is no administration interface or image upload. SQLite is appropriate for this small application but has one writer at a time; contention returns bounded API errors. No multi-instance scaling, performance benchmark, schema migration system, backup/restore workflow, or expired-session maintenance has been validated.
+
+A production runtime would need a production WSGI server, same-origin static hosting with SPA fallback, HTTPS termination, stable signing-key storage, and protected durable SQLite storage/backups. Production-mode tests use Flask's simulated HTTPS request environment; they do not validate real TLS, a reverse proxy, or deployed infrastructure. The API-only CSP must not be copied onto the React HTML. **No deployment is provided or claimed.**
+
+Keyboard, contrast, responsive layouts, and real Chromium 200%/400% zoom have automated coverage. Screen-reader behavior and other browser/assistive-technology combinations still need manual assessment.
+
+## Project structure
+
+```text
+backend/roomshelf/     Flask API, validation, models, SQL queries, security, seed commands
+backend/tests/         API, persistence, configuration, and documentation regression tests
+frontend/src/          React routes, URL state, providers, focus/navigation, local SVGs
+frontend/tests/        Component, state, recovery, and navigation tests
+e2e/                  Real-browser tests and reproducible screenshot capture
+docs/                 Public API, architecture, operations, and application screenshots
+scripts/check_docs.py JSON-fence and local-image validation
+.github/workflows/    Backend, frontend, and browser CI
+```

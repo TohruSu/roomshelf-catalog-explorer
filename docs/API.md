@@ -7,7 +7,7 @@ The browser frontend and `/api` share one origin. Catalog responses are public. 
 Successful reads use a `data` envelope. Validation and operational errors use:
 
 ```json
-{"error":{"code":"invalid_request","message":"Request validation failed.","details":[{"field":"slug","message":"Invalid product slug."}]}}
+{"error":{"code":"invalid_request","message":"Request validation failed.","details":[{"field":"slug","message":"Slug must contain 1–80 lowercase ASCII letters or digits in hyphen-separated segments."}]}}
 ```
 
 All endpoints reject unsupported query parameters. Read endpoints reject request bodies. Errors contain no signing secrets, session keys, SQL statements, or tracebacks. Relevant statuses are 400 for validation, 401 `session_required`, 403 `origin_forbidden` or `csrf_invalid`, 404 `product_not_found` or `route_not_found`, 405 for unsupported methods, 413 for bodies over 4 KiB, 415 for an unsupported POST media type, 503 for unavailable or busy SQLite, and 500 for unexpected failures. `details` is always an array.
@@ -16,7 +16,7 @@ All endpoints reject unsupported query parameters. Read endpoints reject request
 
 `GET /api/health` returns `{"data":{"status":"ok","database":"ok"}}` when the initialized schema is usable; otherwise it returns 503.
 
-`GET /api/filters` returns catalog-wide distinct categories and materials, price bounds, and width/depth/height bounds. Each bound is `{ "min": number, "max": number }`; an empty catalog has empty facet arrays and null bounds. This endpoint does not apply product filters.
+`GET /api/filters` returns catalog-wide distinct categories and materials, price bounds, and width/depth/height bounds. Each bound contains numeric `min` and `max` fields; an empty catalog has empty facet arrays and null bounds. This endpoint does not apply product filters.
 
 `GET /api/products` accepts:
 
@@ -35,22 +35,64 @@ Numeric query values contain ASCII digits only; leading zeroes are accepted. Dup
 
 Ordering is display order for `featured`, price for price sorts, and normalized title for `title_asc`. Every sort uses ascending product ID as its final tie-breaker. Filtering, counting, ordering, and pagination execute in SQLite, with count and rows from the same snapshot. A page beyond the last page returns an empty array and the correct totals. No matches means `total_pages: 0`.
 
-Product summaries have this shape:
+Product summaries have the following fields. This is a complete summary object from the deterministic seed, rather than a complete endpoint response:
 
 ```json
-{"id":1,"slug":"sample-chair-001","title":"Sample Chair","category":"chair","material":"wood","color":"natural","price_jpy":19800,"dimensions_cm":{"width":52,"depth":54,"height":80},"availability":"in_stock","illustration_key":"chair-01"}
+{"id":1,"slug":"arc-bed-001","title":"Arc Bed 01","category":"bed","material":"fabric","color":"natural","price_jpy":135300,"dimensions_cm":{"width":154,"depth":201,"height":48},"availability":"in_stock","illustration_key":"bed-01"}
 ```
 
-`GET /api/products` returns `{"data":[/* summaries */],"meta":{"page":1,"page_size":12,"total":144,"total_pages":12}}`. Product colors are `natural`, `ivory`, `charcoal`, `sage`, or `terracotta`; availability is `in_stock`, `made_to_order`, or `unavailable`. Illustration keys refer only to bundled local artwork.
+Complete response to `GET /api/products?page_size=1` on a fresh seed (one item requested, all matching products counted):
 
-`GET /api/products/{slug}` returns `{"data":{ /* summary fields */, "description":"A compact chair for a quiet corner."}}`. Slugs are 1–80 lowercase ASCII letters/digits in nonempty hyphen-separated segments. Malformed slugs return 400; a valid slug without a matching product returns 404 `product_not_found`. No query parameters are accepted.
+<!-- api-example: GET /api/products?page_size=1 -->
+```json
+{
+  "data": [{
+    "id": 1,
+    "slug": "arc-bed-001",
+    "title": "Arc Bed 01",
+    "category": "bed",
+    "material": "fabric",
+    "color": "natural",
+    "price_jpy": 135300,
+    "dimensions_cm": {"width": 154, "depth": 201, "height": 48},
+    "availability": "in_stock",
+    "illustration_key": "bed-01"
+  }],
+  "meta": {"page": 1, "page_size": 1, "total": 144, "total_pages": 144}
+}
+```
+
+Product colors are `natural`, `ivory`, `charcoal`, `sage`, or `terracotta`; availability is `in_stock`, `made_to_order`, or `unavailable`. Illustration keys refer only to bundled local artwork.
+
+Complete response to `GET /api/products/arc-chair-025` on a fresh seed:
+
+<!-- api-example: GET /api/products/arc-chair-025 -->
+```json
+{
+  "data": {
+    "id": 25,
+    "slug": "arc-chair-025",
+    "title": "Arc Chair 01",
+    "category": "chair",
+    "material": "glass",
+    "color": "terracotta",
+    "price_jpy": 110500,
+    "dimensions_cm": {"width": 68, "depth": 49, "height": 97},
+    "availability": "in_stock",
+    "illustration_key": "chair-01",
+    "description": "A compact chair with a gently angled back for a reading corner or dining table. Its primary material is glass."
+  }
+}
+```
+
+Slugs are 1–80 lowercase ASCII letters/digits in nonempty hyphen-separated segments. Malformed slugs return 400; a valid slug without a matching product returns 404 `product_not_found`. No query parameters are accepted.
 
 ## Anonymous sessions
 
-Call `GET /api/session` before reading or changing the shortlist. It creates a cryptographically random session if the cookie is absent, invalid, expired, or no longer has a corresponding database row. Otherwise it reuses the current session without extending its absolute expiry or rewriting the cookie. It returns:
+Call `GET /api/session` before reading or changing the shortlist. It creates a cryptographically random session if the cookie is absent, invalid, expired, or no longer has a corresponding database row. Otherwise it reuses the current session without extending its absolute expiry or rewriting the cookie. The complete response shape is illustrated below. `SESSION_REF_PLACEHOLDER` and `CSRF_TOKEN_PLACEHOLDER` are deliberately unusable placeholders, not captured credentials; timestamps illustrate a session created at 2026-10-14 00:00 UTC. Obtain actual values from this endpoint at runtime:
 
 ```json
-{"data":{"session_ref":"public non-authorizing fingerprint","csrf_token":"opaque session-bound token","csrf_expires_at":"2026-10-14T01:00:00.000000Z","session_expires_at":"2026-11-13T00:00:00.000000Z"}}
+{"data":{"session_ref":"SESSION_REF_PLACEHOLDER","csrf_token":"CSRF_TOKEN_PLACEHOLDER","csrf_expires_at":"2026-10-14T01:00:00.000000Z","session_expires_at":"2026-11-13T00:00:00.000000Z"}}
 ```
 
 The signed cookie contains the opaque shortlist key, a random CSRF nonce, and fixed expiry. Cookie contents are authenticated, not encrypted; they contain no personal information. Session keys must never be logged or accepted as client-supplied authority. `session_ref` helps detect replacement sessions and cannot authorize access.
@@ -63,10 +105,10 @@ The API does not enable credentialed cross-origin access. `ROOMSHELF_PUBLIC_ORIG
 
 ## Shortlist
 
-`GET /api/shortlist` returns saved products ordered by `added_at` descending, then product ID ascending:
+`GET /api/shortlist` returns saved products ordered by `added_at` descending, then product ID ascending. Complete illustrative response after saving seeded product 1; `added_at` is an example timestamp, not a captured user record:
 
 ```json
-{"data":[{"product":{"id":1,"slug":"sample-chair-001","title":"Sample Chair","category":"chair","material":"wood","color":"natural","price_jpy":19800,"dimensions_cm":{"width":52,"depth":54,"height":80},"availability":"in_stock","illustration_key":"chair-01"},"added_at":"2026-10-14T00:00:00.000000Z"}],"meta":{"total":1}}
+{"data":[{"product":{"id":1,"slug":"arc-bed-001","title":"Arc Bed 01","category":"bed","material":"fabric","color":"natural","price_jpy":135300,"dimensions_cm":{"width":154,"depth":201,"height":48},"availability":"in_stock","illustration_key":"bed-01"},"added_at":"2026-10-14T00:00:00.000000Z"}],"meta":{"total":1}}
 ```
 
 An empty shortlist is `{"data":[],"meta":{"total":0}}`.
