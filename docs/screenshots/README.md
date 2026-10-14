@@ -5,7 +5,7 @@ Actual Flask/React browser captures with a newly initialized SQLite database and
 | File | Capture viewport / state |
 | --- | --- |
 | `desktop-catalog.png` | 1440 × 1080; full page; choose Chair and Metal, then ascending price (five matches) |
-| `mobile-catalog.png` | 390 × 844; viewport; fresh unfiltered catalog with default collapsed Filters |
+| `mobile-catalog.png` | 390 × 844; viewport; fresh unfiltered catalog with default collapsed Filters; click the static product count before capture to clear incidental heading focus |
 | `product-details.png` | 1440 × 1080; full page; open seeded Arc Chair 01 from the catalog |
 | `three-chair-comparison.png` | 1440 × 1080; full page; select Arc Chair 01, Cedarline Chair 02, Dune Chair 03, then open Compare (3) |
 

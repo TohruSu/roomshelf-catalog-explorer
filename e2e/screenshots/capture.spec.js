@@ -75,6 +75,10 @@ test('capture four genuine seeded application views', async ({ browser, baseURL 
       await mobilePage.goto('/products');
       await expect(cards(mobilePage)).toHaveCount(12);
       await expect(mobilePage.locator('.filter-panel details')).not.toHaveAttribute('open');
+      const heading = mobilePage.getByRole('heading', { name: 'Make room for the everyday.', exact: true });
+      await expect(heading).toBeFocused();
+      await mobilePage.getByText('144 products', { exact: true }).click();
+      await expect(heading).not.toBeFocused();
       await capture(mobilePage, 'mobile-catalog.png');
     } finally { await mobile.close(); }
     expect(unexpected).toEqual([]);
