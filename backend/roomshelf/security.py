@@ -1,11 +1,14 @@
 import hashlib
 import hmac
+import ipaddress
 import os
 import re
 import secrets
 import tempfile
+import unicodedata
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from encodings.idna import nameprep
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -21,6 +24,8 @@ from .models import AnonymousShortlist
 SESSION_LIFETIME = timedelta(days=30)
 CSRF_LIFETIME = timedelta(hours=1)
 HEX_KEY = re.compile(r"[0-9a-f]{64}")
+DNS_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+IPV4_NUMBER = re.compile(r"(?:[0-9]+|0x[0-9a-f]*)")
 
 
 def timestamp(value: datetime) -> str:
@@ -58,6 +63,112 @@ def _development_secret(path: Path) -> str:
     return path.read_text().strip()
 
 
+def _canonical_hostname(host: str) -> bool:
+    try:
+        return host == str(ipaddress.IPv4Address(host))
+    except ipaddress.AddressValueError:
+        pass
+    # Browsers interpret a numeric final label as IPv4, including hex/octal and
+    # shortened forms. Only the dotted decimal form above is accepted.
+    domain = host.removesuffix(".")
+    labels = domain.split(".")
+    return (
+        len(domain) <= 253
+        and all(_valid_dns_label(label) for label in labels)
+        and IPV4_NUMBER.fullmatch(labels[-1]) is None
+    )
+
+
+def _valid_dns_label(label: str) -> bool:
+    if DNS_LABEL.fullmatch(label) is None:
+        return False
+    if not label.startswith("xn--"):
+        return True
+    try:
+        decoded = label[4:].encode("ascii").decode("punycode")
+        if (
+            not decoded
+            or unicodedata.category(decoded[0]).startswith("M")
+            or any(unicodedata.category(character).startswith("C") for character in decoded)
+        ):
+            return False
+        # Conservatively reject mixed-direction labels using current Unicode,
+        # including scripts newer than the stdlib IDNA2003 tables.
+        directions = [unicodedata.bidirectional(character) for character in decoded]
+        if any(direction in {"R", "AL"} for direction in directions):
+            ending = next(
+                (direction for direction in reversed(directions) if direction != "NSM"), ""
+            )
+            if (
+                directions[0] not in {"R", "AL"}
+                or "L" in directions
+                or ending not in {"R", "AL", "EN", "AN"}
+                or ("EN" in directions and "AN" in directions)
+            ):
+                return False
+        # Require unmapped ACE labels, except the IDNA2008 deviations ß and ς.
+        # Contextual joiners are deliberately unsupported rather than silently
+        # removed by IDNA2003 nameprep. No configuration value is normalized.
+        if nameprep(decoded) != decoded.replace("ß", "ss").replace("ς", "σ"):
+            return False
+        decoded.encode("idna")
+        return not decoded.isascii() and decoded.encode("punycode").decode("ascii") == label[4:]
+    except UnicodeError:
+        return False
+
+
+def _browser_ipv6(address: ipaddress.IPv6Address) -> str:
+    # Python renders IPv4-mapped IPv6 with dotted decimal; browsers use hex.
+    words = [f"{int.from_bytes(address.packed[index : index + 2]):x}" for index in range(0, 16, 2)]
+    best_start, best_length, start = 0, 0, 0
+    for end in range(len(words) + 1):
+        if end < len(words) and words[end] == "0":
+            continue
+        if end - start > best_length:
+            best_start, best_length = start, end - start
+        start = end + 1
+    if best_length < 2:
+        return ":".join(words)
+    return ":".join(words[:best_start]) + "::" + ":".join(words[best_start + best_length :])
+
+
+def _is_canonical_origin(origin: str, *, production: bool) -> bool:
+    # urlsplit strips some controls and accepts authorities a browser would
+    # rewrite. Compare a reconstructed canonical origin without changing config.
+    if not origin.isascii() or any(
+        ord(character) <= 32 or ord(character) == 127 for character in origin
+    ):
+        return False
+    try:
+        parsed = urlsplit(origin)
+        host, port = parsed.hostname, parsed.port
+        if (
+            parsed.scheme not in ({"https"} if production else {"http", "https"})
+            or host is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or (port is not None and not 1 <= port <= 65535)
+            or port == (443 if parsed.scheme == "https" else 80)
+        ):
+            return False
+        if parsed.netloc.startswith("["):
+            if "%" in host:
+                return False
+            authority = f"[{_browser_ipv6(ipaddress.IPv6Address(host))}]"
+        elif _canonical_hostname(host):
+            authority = host
+        else:
+            return False
+        if port is not None:
+            authority += f":{port}"
+        return origin == f"{parsed.scheme}://{authority}"
+    except ValueError:
+        return False
+
+
 def configure_security(app: Flask) -> None:
     environment = app.config["ROOMSHELF_ENV"]
     if environment not in {"development", "production"}:
@@ -69,28 +180,15 @@ def configure_security(app: Flask) -> None:
     if not isinstance(secret, str) or len(secret) < 32:
         raise ValueError("ROOMSHELF_SECRET_KEY must contain at least 32 characters.")
     origin = app.config.get("PUBLIC_ORIGIN")
-    if not origin and not production:
+    if origin is None and not production:
         origin = "http://localhost:5173"
     if not isinstance(origin, str):
-        raise ValueError("ROOMSHELF_PUBLIC_ORIGIN is required in production.")
-    parsed = urlsplit(origin)
-    try:
-        valid_port = parsed.port is None or 1 <= parsed.port <= 65535
-    except ValueError:
-        valid_port = False
-    if (
-        parsed.scheme not in ({"https"} if production else {"http", "https"})
-        or not parsed.hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-        or parsed.netloc != parsed.netloc.lower()
-        or not valid_port
-        or origin != f"{parsed.scheme}://{parsed.netloc}"
-    ):
-        raise ValueError("ROOMSHELF_PUBLIC_ORIGIN must be an exact origin (HTTPS in production).")
+        raise ValueError("ROOMSHELF_PUBLIC_ORIGIN must be a string and is required in production.")
+    if not _is_canonical_origin(origin, production=production):
+        raise ValueError(
+            "ROOMSHELF_PUBLIC_ORIGIN must be a canonical origin with a valid ASCII host "
+            "and no explicit default, empty, or padded port (HTTPS in production)."
+        )
     app.config.update(
         SECRET_KEY=secret,
         PUBLIC_ORIGIN=origin,

@@ -19,6 +19,53 @@ export class ApiError extends Error {
   }
 }
 
+export const REQUEST_TIMEOUT_MS = 10_000;
+
+export async function withRequestDeadline<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  callerSignal?: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  let rejectCancellation!: (reason: unknown) => void;
+  const cancellation = new Promise<never>((_, reject) => {
+    rejectCancellation = reject;
+  });
+  const cancel = (reason: unknown) => {
+    if (controller.signal.aborted) return;
+    rejectCancellation(reason);
+    controller.abort(reason);
+  };
+  const onCallerAbort = () => cancel(callerSignal?.reason);
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = setTimeout(
+    () =>
+      cancel(
+        new ApiError(
+          0,
+          "The catalog request timed out. Please try again.",
+          [],
+          "request_timeout",
+        ),
+      ),
+    REQUEST_TIMEOUT_MS,
+  );
+  if (callerSignal?.aborted) onCallerAbort();
+  try {
+    let work: Promise<T>;
+    try {
+      controller.signal.throwIfAborted();
+      work = operation(controller.signal);
+    } catch (error) {
+      work = Promise.reject(error);
+    }
+    // Abort alone cannot release a stalled operation that ignores its signal.
+    return await Promise.race([work, cancellation]);
+  } finally {
+    clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
+}
+
 function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
   if (!value || typeof value !== "object" || !("error" in value)) return false;
   const error = value.error;
@@ -43,53 +90,58 @@ async function requestJson<T>(
     csrfToken?: string;
   },
 ): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(path, {
-      signal: options.signal,
-      method: options.method ?? "GET",
-      credentials: "same-origin",
-      headers: {
-        Accept: "application/json",
+  return withRequestDeadline(async (signal) => {
+    let response: Response;
+    try {
+      response = await fetch(path, {
+        signal,
+        method: options.method ?? "GET",
+        credentials: "same-origin",
+        headers: {
+          Accept: "application/json",
+          ...(options.body === undefined
+            ? {}
+            : { "Content-Type": "application/json" }),
+          ...(options.csrfToken ? { "X-CSRF-Token": options.csrfToken } : {}),
+        },
         ...(options.body === undefined
           ? {}
-          : { "Content-Type": "application/json" }),
-        ...(options.csrfToken ? { "X-CSRF-Token": options.csrfToken } : {}),
-      },
-      ...(options.body === undefined
-        ? {}
-        : { body: JSON.stringify(options.body) }),
-    });
-  } catch (error) {
-    if (options.signal?.aborted) throw error;
-    throw new ApiError(
-      0,
-      "Unable to reach the catalog. Check your connection and try again.",
-    );
-  }
-  if (response.ok && response.status === 204) return undefined as T;
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new ApiError(
-      response.status,
-      "The catalog returned an unreadable response. Please try again.",
-      [],
-      "unreadable_response",
-    );
-  }
-  if (!response.ok) {
-    throw new ApiError(
-      response.status,
-      isErrorEnvelope(payload)
-        ? payload.error.message
-        : "The catalog request failed. Please try again.",
-      isErrorEnvelope(payload) ? payload.error.details : [],
-      isErrorEnvelope(payload) ? payload.error.code : "request_failed",
-    );
-  }
-  return payload as T;
+          : { body: JSON.stringify(options.body) }),
+      });
+    } catch {
+      if (signal.aborted) throw signal.reason;
+      throw new ApiError(
+        0,
+        "Unable to reach the catalog. Check your connection and try again.",
+      );
+    }
+    signal.throwIfAborted();
+    if (response.ok && response.status === 204) return undefined as T;
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      if (signal.aborted) throw signal.reason;
+      throw new ApiError(
+        response.status,
+        "The catalog returned an unreadable response. Please try again.",
+        [],
+        "unreadable_response",
+      );
+    }
+    signal.throwIfAborted();
+    if (!response.ok) {
+      throw new ApiError(
+        response.status,
+        isErrorEnvelope(payload)
+          ? payload.error.message
+          : "The catalog request failed. Please try again.",
+        isErrorEnvelope(payload) ? payload.error.details : [],
+        isErrorEnvelope(payload) ? payload.error.code : "request_failed",
+      );
+    }
+    return payload as T;
+  }, options.signal);
 }
 
 export function getJson<T>(path: string, signal: AbortSignal): Promise<T> {
