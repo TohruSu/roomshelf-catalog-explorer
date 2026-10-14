@@ -8,7 +8,13 @@ import {
   useState,
 } from "react";
 import type { ReactNode } from "react";
-import { ApiError, deleteJson, getJson, postJson } from "../api/client";
+import {
+  ApiError,
+  deleteJson,
+  getJson,
+  postJson,
+  withRequestDeadline,
+} from "../api/client";
 import type {
   Product,
   SaveShortlistResponse,
@@ -41,11 +47,8 @@ const UPDATE_UNCONFIRMED =
 // request is shared; tokens and session references stay in memory, never storage.
 let bootstrapPromise: Promise<Session> | null = null;
 
-async function requestSession(): Promise<Session> {
-  const { data } = await getJson<SessionResponse>(
-    "/api/session",
-    new AbortController().signal,
-  );
+async function requestSession(signal: AbortSignal): Promise<Session> {
+  const { data } = await getJson<SessionResponse>("/api/session", signal);
   if (
     !data ||
     typeof data.session_ref !== "string" ||
@@ -65,19 +68,27 @@ async function coordinatedSession(): Promise<Session> {
   // Concurrent first visits otherwise create two sessions before either tab has
   // a cookie. The browser's origin-scoped lock lets the second tab reuse it.
   // No session identifier or token is exchanged through browser storage.
-  if (!navigator.locks) return requestSession();
-  let started = false;
-  try {
-    return await navigator.locks.request("roomshelf-session-bootstrap", () => {
-      started = true;
-      return requestSession();
-    });
-  } catch (failure) {
-    // Unsupported or denied locks use the normal session-change recovery. A
-    // failure of the request itself is still surfaced, rather than retried.
-    if (started) throw failure;
-    return requestSession();
-  }
+  return withRequestDeadline(async (signal) => {
+    if (!navigator.locks) return requestSession(signal);
+    let started = false;
+    try {
+      return await navigator.locks.request(
+        "roomshelf-session-bootstrap",
+        { signal },
+        () => {
+          // A late lock callback must not start a cookie request after expiry.
+          signal.throwIfAborted();
+          started = true;
+          return requestSession(signal);
+        },
+      );
+    } catch (failure) {
+      // Unsupported or denied locks use the normal session-change recovery.
+      // Timeout, cancellation, or an acquired request failure are not retried.
+      if (started || signal.aborted) throw failure;
+      return requestSession(signal);
+    }
+  });
 }
 
 function bootstrapSession(): Promise<Session> {
@@ -224,10 +235,10 @@ export function ShortlistProvider({ children }: { children: ReactNode }) {
 
       const operation = async () => {
         if (!mountedRef.current) return;
-        if (
-          !readyRef.current ||
-          sessionRef.current?.session_ref !== intendedSession.session_ref
-        ) {
+        // Failed reconciliation already explains that the result is unknown.
+        // Cancel waiting writes without replacing that actionable message.
+        if (!readyRef.current) return;
+        if (sessionRef.current?.session_ref !== intendedSession.session_ref) {
           setError(
             "Your shortlist changed while this action was waiting. Please check it and try again.",
           );

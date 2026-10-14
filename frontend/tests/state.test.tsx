@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { act, render, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as client from "../src/api/client";
 import type { Product, Session, ShortlistItem } from "../src/api/types";
 import { CompareProvider, useCompare } from "../src/state/CompareProvider";
@@ -109,8 +109,12 @@ async function ready(view: ReturnType<typeof setupShortlist>) {
 
 describe("shortlist session and read state", () => {
   it("uses the origin-scoped bootstrap lock without browser storage", async () => {
-    const request = vi.fn(async (_name: string, run: () => Promise<Session>) =>
-      run(),
+    const request = vi.fn(
+      async (
+        _name: string,
+        _options: LockOptions,
+        run: () => Promise<Session>,
+      ) => run(),
     );
     const setLocal = vi.spyOn(Storage.prototype, "setItem");
     vi.stubGlobal("navigator", { locks: { request } });
@@ -119,6 +123,7 @@ describe("shortlist session and read state", () => {
     await ready(view);
     expect(request).toHaveBeenCalledWith(
       "roomshelf-session-bootstrap",
+      { signal: expect.any(AbortSignal) },
       expect.any(Function),
     );
     expect(api.calls("/api/session")).toHaveLength(1);
@@ -150,8 +155,12 @@ describe("shortlist session and read state", () => {
   );
 
   it("surfaces a failed request inside an acquired lock without an automatic fallback retry", async () => {
-    const request = vi.fn(async (_name: string, run: () => Promise<Session>) =>
-      run(),
+    const request = vi.fn(
+      async (
+        _name: string,
+        _options: LockOptions,
+        run: () => Promise<Session>,
+      ) => run(),
     );
     vi.stubGlobal("navigator", { locks: { request } });
     const api = server((path) =>
@@ -499,6 +508,7 @@ describe("shortlist mutation state", () => {
     await act(async () => Promise.all([action, queued]));
     expect(view.state().status).toBe("error");
     expect(view.state().ids.size).toBe(0);
+    expect(view.state().error).toContain("could not be confirmed");
     expect(api.calls("/api/shortlist/items")).toHaveLength(1);
     failing = false;
     act(() => view.state().retry());
@@ -531,6 +541,386 @@ describe("shortlist mutation state", () => {
     });
     expect(api.calls("/api/shortlist/items")).toHaveLength(1);
     expect(api.calls("/api/shortlist")).toHaveLength(1);
+  });
+});
+
+describe("shortlist request deadlines", () => {
+  afterEach(() => vi.useRealTimers());
+
+  async function expireRequest() {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(client.REQUEST_TIMEOUT_MS);
+    });
+  }
+
+  it.each(["absent", "acquired"])(
+    "releases a stalled bootstrap with %s locks and allows an explicit retry",
+    async (locks) => {
+      const firstSession = deferred<Response>();
+      const request = vi.fn(
+        async (
+          _name: string,
+          _options: LockOptions,
+          run: () => Promise<Session>,
+        ) => run(),
+      );
+      vi.stubGlobal(
+        "navigator",
+        locks === "absent" ? {} : { locks: { request } },
+      );
+      let sessions = 0;
+      const api = server((path) =>
+        path === "/api/session" && ++sessions === 1
+          ? firstSession.promise
+          : undefined,
+      );
+      vi.useFakeTimers();
+      const view = setupShortlist(true);
+      await act(async () => {});
+      expect(api.calls("/api/session")).toHaveLength(1);
+      await expireRequest();
+      expect(view.state().status).toBe("error");
+      expect(view.state().error).toContain("timed out");
+      expect(api.calls("/api/session")).toHaveLength(1);
+      expect(api.calls("/api/session")[0]![1]?.signal?.aborted).toBe(true);
+      await act(async () => view.state().retry());
+      expect(view.state().status).toBe("ready");
+      expect(api.calls("/api/session")).toHaveLength(2);
+      await act(async () =>
+        firstSession.resolve(
+          json({ data: { ...session, csrf_token: "obsolete-token" } }),
+        ),
+      );
+      await act(async () => view.state().save(first));
+      expect(
+        new Headers(api.calls("/api/shortlist/items")[0]![1]?.headers).get(
+          "X-CSRF-Token",
+        ),
+      ).toBe(session.csrf_token);
+      expect(view.state().error).toBeNull();
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("bounds waiting for a bootstrap lock without a late fallback or cookie request", async () => {
+    const lock = deferred<Session>();
+    let lateRun!: () => Promise<Session>;
+    const request = vi
+      .fn()
+      .mockImplementationOnce(
+        (_name: string, _options: LockOptions, run: () => Promise<Session>) => {
+          lateRun = run;
+          return lock.promise;
+        },
+      )
+      .mockImplementation(
+        (_name: string, _options: LockOptions, run: () => Promise<Session>) =>
+          run(),
+      );
+    vi.stubGlobal("navigator", { locks: { request } });
+    const api = server();
+    vi.useFakeTimers();
+    const view = setupShortlist();
+    await act(async () => {});
+    expect(api.calls("/api/session")).toHaveLength(0);
+    await expireRequest();
+    expect(view.state().status).toBe("error");
+    expect(request.mock.calls[0]![1].signal.aborted).toBe(true);
+    expect(() => lateRun()).toThrow();
+    await act(async () =>
+      lock.reject(new DOMException("Locks denied late", "SecurityError")),
+    );
+    expect(api.calls("/api/session")).toHaveLength(0);
+    await act(async () => view.state().retry());
+    expect(view.state().status).toBe("ready");
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(api.calls("/api/session")).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("recovers when the initial session response body never finishes", async () => {
+    const body = deferred<unknown>();
+    const response = json({ data: session });
+    vi.spyOn(response, "json").mockReturnValue(body.promise);
+    let sessions = 0;
+    const api = server((path) =>
+      path === "/api/session" && ++sessions === 1 ? response : undefined,
+    );
+    vi.useFakeTimers();
+    const view = setupShortlist();
+    await act(async () => {});
+    await expireRequest();
+    expect(view.state().status).toBe("error");
+    expect(view.state().error).toContain("timed out");
+    await act(async () => view.state().retry());
+    expect(view.state().status).toBe("ready");
+    await act(async () =>
+      body.resolve({ data: { ...session, session_ref: "obsolete-session" } }),
+    );
+    await act(async () => view.state().save(first));
+    expect(api.calls("/api/session")).toHaveLength(2);
+    expect(view.state().isSaved(first.id)).toBe(true);
+    expect(view.state().error).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([
+    ["POST", true],
+    ["POST", false],
+    ["DELETE", true],
+    ["DELETE", false],
+  ] as const)(
+    "reconciles a stalled %s with committed=%s without replaying it",
+    async (method, committed) => {
+      const response = deferred<Response>();
+      const mutationPath =
+        method === "POST"
+          ? "/api/shortlist/items"
+          : `/api/shortlist/items/${first.id}`;
+      const api = server((path) => {
+        if (path !== mutationPath) return;
+        if (committed) {
+          if (method === "POST") api.saved.set(first.id, item(first));
+          else api.saved.delete(first.id);
+        }
+        return response.promise;
+      });
+      if (method === "DELETE") api.saved.set(first.id, item(first));
+      const view = setupShortlist();
+      await ready(view);
+      vi.useFakeTimers();
+      let action!: Promise<void>;
+      await act(async () => {
+        action =
+          method === "POST"
+            ? view.state().save(first)
+            : view.state().remove(first.id);
+        void view.state().toggle(first);
+      });
+      expect(api.calls(mutationPath)).toHaveLength(1);
+      expect(view.state().pendingIds.has(first.id)).toBe(true);
+      await expireRequest();
+      await act(async () => action);
+      expect(api.calls(mutationPath)).toHaveLength(1);
+      expect(api.calls(mutationPath)[0]![1]?.signal?.aborted).toBe(true);
+      expect(api.calls("/api/session")).toHaveLength(2);
+      expect(api.calls("/api/shortlist")).toHaveLength(2);
+      expect(view.state().isSaved(first.id)).toBe(
+        method === "POST" ? committed : !committed,
+      );
+      expect(view.state().status).toBe("ready");
+      expect(view.state().error).toContain("could not be confirmed");
+      expect(view.state().pendingIds.size).toBe(0);
+      const callsBeforeLateResponse = api.fetch.mock.calls.length;
+      await act(async () =>
+        response.resolve(
+          method === "POST"
+            ? json({ data: { product_id: first.id, saved: true } })
+            : new Response(null, { status: 204 }),
+        ),
+      );
+      expect(api.fetch.mock.calls).toHaveLength(callsBeforeLateResponse);
+      expect(view.state().isSaved(first.id)).toBe(
+        method === "POST" ? committed : !committed,
+      );
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("reconciles a committed POST whose successful response body stalls", async () => {
+    const body = deferred<unknown>();
+    const response = json({ data: { product_id: first.id, saved: true } });
+    vi.spyOn(response, "json").mockReturnValue(body.promise);
+    const api = server((path) => {
+      if (path !== "/api/shortlist/items") return;
+      api.saved.set(first.id, item(first));
+      return response;
+    });
+    const view = setupShortlist();
+    await ready(view);
+    vi.useFakeTimers();
+    let action!: Promise<void>;
+    await act(async () => {
+      action = view.state().save(first);
+    });
+    await expireRequest();
+    await act(async () => action);
+    expect(api.calls("/api/shortlist/items")).toHaveLength(1);
+    expect(view.state().isSaved(first.id)).toBe(true);
+    expect(view.state().error).toContain("could not be confirmed");
+    expect(view.state().pendingIds.size).toBe(0);
+    await act(async () =>
+      body.resolve({ data: { product_id: first.id, saved: true } }),
+    );
+    expect(api.calls("/api/shortlist")).toHaveLength(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not retry a timed-out error body that later reports csrf_invalid", async () => {
+    const body = deferred<unknown>();
+    const response = failure(403, "csrf_invalid");
+    vi.spyOn(response, "json").mockReturnValue(body.promise);
+    const api = server((path) =>
+      path === "/api/shortlist/items" ? response : undefined,
+    );
+    const view = setupShortlist();
+    await ready(view);
+    vi.useFakeTimers();
+    let action!: Promise<void>;
+    await act(async () => {
+      action = view.state().save(first);
+    });
+    await expireRequest();
+    await act(async () => action);
+    expect(view.state().status).toBe("ready");
+    expect(view.state().ids.size).toBe(0);
+    expect(view.state().error).toContain("could not be confirmed");
+    expect(api.calls("/api/shortlist/items")).toHaveLength(1);
+    await act(async () =>
+      body.resolve({
+        error: { code: "csrf_invalid", message: "Expired", details: [] },
+      }),
+    );
+    expect(api.calls("/api/shortlist/items")).toHaveLength(1);
+    expect(api.calls("/api/session")).toHaveLength(2);
+    expect(view.state().pendingIds.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each(["POST", "DELETE"])(
+    "unblocks queued writes after a timed-out %s and ignores its late result",
+    async (method) => {
+      const oldResponse = deferred<Response>();
+      let firstMutation = true;
+      const api = server((path) => {
+        const mutationPath =
+          method === "POST"
+            ? "/api/shortlist/items"
+            : `/api/shortlist/items/${first.id}`;
+        if (path !== mutationPath || !firstMutation) return;
+        firstMutation = false;
+        if (method === "POST") api.saved.set(first.id, item(first));
+        else api.saved.delete(first.id);
+        return oldResponse.promise;
+      });
+      if (method === "DELETE") api.saved.set(first.id, item(first));
+      const view = setupShortlist();
+      await ready(view);
+      vi.useFakeTimers();
+      let firstAction!: Promise<void>;
+      let queuedAction!: Promise<void>;
+      await act(async () => {
+        firstAction =
+          method === "POST"
+            ? view.state().save(first)
+            : view.state().remove(first.id);
+        queuedAction = view.state().save(second);
+      });
+      expect([...view.state().pendingIds]).toEqual([first.id, second.id]);
+      expect(api.calls("/api/shortlist/items")).toHaveLength(
+        method === "POST" ? 1 : 0,
+      );
+      await expireRequest();
+      await act(async () => Promise.all([firstAction, queuedAction]));
+      const expected = method === "POST" ? [first.id, second.id] : [second.id];
+      expect([...view.state().ids]).toEqual(expected);
+      expect(view.state().status).toBe("ready");
+      expect(view.state().pendingIds.size).toBe(0);
+      expect(api.calls("/api/shortlist/items")).toHaveLength(
+        method === "POST" ? 2 : 1,
+      );
+      const callsBeforeLateResponse = api.fetch.mock.calls.length;
+      await act(async () =>
+        oldResponse.resolve(
+          method === "POST"
+            ? json({ data: { product_id: first.id, saved: true } })
+            : new Response(null, { status: 204 }),
+        ),
+      );
+      expect([...view.state().ids]).toEqual(expected);
+      expect(api.fetch.mock.calls).toHaveLength(callsBeforeLateResponse);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it.each(["/api/session", "/api/shortlist"])(
+    "bounds timed-out reconciliation at %s, clears pending state, and cancels queued writes",
+    async (stalledPath) => {
+      const mutation = deferred<Response>();
+      const reconciliation = deferred<Response>();
+      let sessions = 0;
+      let reads = 0;
+      let failing = true;
+      const api = server((path) => {
+        if (path === "/api/shortlist/items" && failing) return mutation.promise;
+        if (path === "/api/session" && ++sessions > 1 && failing)
+          return stalledPath === path ? reconciliation.promise : undefined;
+        if (path === "/api/shortlist" && ++reads > 1 && failing)
+          return stalledPath === path ? reconciliation.promise : undefined;
+      });
+      const view = setupShortlist();
+      await ready(view);
+      vi.useFakeTimers();
+      let firstAction!: Promise<void>;
+      let queuedAction!: Promise<void>;
+      await act(async () => {
+        firstAction = view.state().save(first);
+        queuedAction = view.state().save(second);
+      });
+      await expireRequest();
+      expect(view.state().status).toBe("loading");
+      expect(view.state().pendingIds.size).toBe(2);
+      await expireRequest();
+      await act(async () => Promise.all([firstAction, queuedAction]));
+      expect(view.state().status).toBe("error");
+      expect(view.state().ids.size).toBe(0);
+      expect(view.state().pendingIds.size).toBe(0);
+      expect(view.state().error).toContain("could not be confirmed");
+      expect(view.state().error).toContain("reload your shortlist");
+      expect(api.calls("/api/shortlist/items")).toHaveLength(1);
+      failing = false;
+      await act(async () => view.state().retry());
+      expect(view.state().status).toBe("ready");
+      await act(async () => view.state().save(second));
+      const callsBeforeLateResponses = api.fetch.mock.calls.length;
+      await act(async () => {
+        mutation.resolve(json({ data: { product_id: first.id, saved: true } }));
+        reconciliation.reject(new TypeError("Obsolete reconciliation failed"));
+      });
+      expect([...view.state().ids]).toEqual([second.id]);
+      expect(view.state().error).toBeNull();
+      expect(api.fetch.mock.calls).toHaveLength(callsBeforeLateResponses);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
+
+  it("cancels queued writes if timeout reconciliation discovers a replaced session", async () => {
+    const mutation = deferred<Response>();
+    let sessions = 0;
+    const replacement = { ...session, session_ref: "browser-b" };
+    const api = server((path) => {
+      if (path === "/api/session")
+        return json({ data: ++sessions === 1 ? session : replacement });
+      if (path === "/api/shortlist/items") return mutation.promise;
+    });
+    const view = setupShortlist();
+    await ready(view);
+    vi.useFakeTimers();
+    let firstAction!: Promise<void>;
+    let queuedAction!: Promise<void>;
+    await act(async () => {
+      firstAction = view.state().save(first);
+      queuedAction = view.state().save(second);
+    });
+    await expireRequest();
+    await act(async () => Promise.all([firstAction, queuedAction]));
+    expect(api.calls("/api/shortlist/items")).toHaveLength(1);
+    expect(view.state().status).toBe("ready");
+    expect(view.state().pendingIds.size).toBe(0);
+    expect(view.state().error).toMatch(/changed|ended/);
+    await act(async () => mutation.reject(new TypeError("Late response loss")));
+    expect(view.state().error).toMatch(/changed|ended/);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

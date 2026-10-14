@@ -37,7 +37,7 @@ The default database is `backend/instance/catalog.sqlite3`, which is ignored by 
 
 Development creates a random signing key in the ignored `backend/instance/session-secret` file. Keep that file and the database to preserve shortlist access after restarting the server. Alternatively, supply `ROOMSHELF_SECRET_KEY` through the process environment. Never commit signing secrets. Anonymous shortlists expire 30 days after creation; activity does not extend that deadline. Clearing the browser cookie or replacing the signing key loses access to that browser's previous shortlist. Comparison selections live in React memory and clear on reload.
 
-The default browser origin is `http://localhost:5173`. If using another hostname or port, set `ROOMSHELF_PUBLIC_ORIGIN` to its exact origin, with no trailing slash. The frontend and API must share a browser origin through the Vite proxy or an equivalent reverse proxy.
+The default browser origin is `http://localhost:5173`. If using another hostname or port, set `ROOMSHELF_PUBLIC_ORIGIN` to the browser's canonical origin, with no trailing slash. Use lowercase ASCII hostnames, omit default ports (`:80` for HTTP and `:443` for HTTPS), and write other ports without leading zeroes. IPv6 addresses use brackets and their compressed lowercase form, for example `https://[2001:db8::1]:8443`. Internationalized names must use canonical `xn--` labels. Standard-library checks support a conservative subset of those names; contextual Unicode joiners are unsupported. Invalid or noncanonical configuration stops startup; the server does not normalize incoming Origin headers. The frontend and API must share a browser origin through the Vite proxy or an equivalent reverse proxy.
 
 For a production runtime, set `ROOMSHELF_ENV=production`, a stable random `ROOMSHELF_SECRET_KEY` of at least 32 characters, and an HTTPS `ROOMSHELF_PUBLIC_ORIGIN`. Missing or invalid production configuration stops startup. The production cookie is host-only, Secure, HttpOnly, and SameSite=Lax. Use a production WSGI server and serve the built frontend through the same HTTPS origin; Flask's development server is for local use.
 
@@ -57,6 +57,8 @@ Initialization and ordinary seeding preserve existing data. The seed inserts mis
 - `DELETE /api/shortlist/items/{product_id}`: idempotently remove a product.
 
 See [the API reference](docs/API.md) for request shapes, security requirements, expiry, and recovery behavior.
+
+Browser API requests have a 10-second deadline covering the connection and response body. Session bootstrap also limits its wait for a browser lock to that deadline. A timeout leaves a mutation's commit result uncertain: the frontend reads the server's current shortlist without resending the write. Recovery reads have their own deadlines, so recovery can take longer than one request. If recovery fails, pending controls are released and the user can reload the shortlist before trying the action again.
 
 Catalog query parameters are `q`, repeatable `category` and `material`, `min_price`, `max_price`, `max_width`, `sort`, `page`, and `page_size`. Facet values combine with OR inside each facet and AND across facets. Numeric bounds are inclusive. Search requires each normalized term to occur literally in the title or description.
 
