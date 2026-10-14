@@ -71,7 +71,7 @@ The API does not enable credentialed cross-origin access. On personal GETs, an O
 
 An empty shortlist is `{"data":[],"meta":{"total":0}}`.
 
-`POST /api/shortlist/items` requires `Content-Type: application/json`, Origin, and CSRF headers. Its only body field is `{"product_id":1}`: a JSON integer from 1 through 2147483647. Strings, booleans, fractions, missing fields, and extra fields return 400. Unknown products return 404. Both a new save and an already saved product return 200 `{"data":{"product_id":1,"saved":true}}`; repeated saves retain the original timestamp.
+`POST /api/shortlist/items` requires `Content-Type: application/json`, optionally with a charset parameter, plus Origin and CSRF headers. Media-type names are case-insensitive. Other types, including `application/*+json`, return 415 `unsupported_media_type`; malformed JSON with a supported type returns 400. Its only body field is `{"product_id":1}`: a JSON integer from 1 through 2147483647. Strings, booleans, fractions, missing fields, and extra fields return 400. Unknown products return 404. Both a new save and an already saved product return 200 `{"data":{"product_id":1,"saved":true}}`; repeated saves retain the original timestamp.
 
 `DELETE /api/shortlist/items/{product_id}` requires Origin and CSRF headers, accepts no body or query, and validates a positive ASCII-digit ID in the same range. It returns 204 with no body even when the membership or product is already absent. Deletes are scoped to the current session. Mutations use an atomic SQLite transaction, reserve the writer before reading, and publish success only after commit. Foreign keys and the composite membership key prevent orphan rows and duplicates.
 

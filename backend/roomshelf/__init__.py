@@ -39,7 +39,10 @@ def create_app(config: Mapping[str, Any] | None = None) -> Flask:
     def security_headers(response: Any) -> Any:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+        if request.path == "/api" or request.path.startswith("/api/"):
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'none'; frame-ancestors 'none'"
+            )
         if request.path == "/api/session" or request.path.startswith("/api/shortlist"):
             response.headers["Cache-Control"] = "no-store"
             response.vary.add("Cookie")

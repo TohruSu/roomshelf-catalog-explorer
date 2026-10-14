@@ -47,7 +47,7 @@ def _no_query() -> None:
 
 
 def _add_body() -> AddItem:
-    if not request.is_json:
+    if request.mimetype != "application/json":
         raise ApiError(415, "unsupported_media_type", "Content-Type must be application/json.")
     try:
         values = request.get_json()

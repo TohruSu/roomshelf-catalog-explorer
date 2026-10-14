@@ -41,6 +41,8 @@ The default browser origin is `http://localhost:5173`. If using another hostname
 
 For a production runtime, set `ROOMSHELF_ENV=production`, a stable random `ROOMSHELF_SECRET_KEY` of at least 32 characters, and an HTTPS `ROOMSHELF_PUBLIC_ORIGIN`. Missing or invalid production configuration stops startup. The production cookie is host-only, Secure, HttpOnly, and SameSite=Lax. Use a production WSGI server and serve the built frontend through the same HTTPS origin; Flask's development server is for local use.
 
+Production-mode tests use Flask's HTTPS request environment to verify startup validation, cookie flags, Origin/CSRF enforcement, and absolute session expiry. They do not establish a TLS connection or validate a deployed reverse proxy. Configure TLS termination, forwarded headers, stable signing-key storage, and SQLite storage/backup permissions for the chosen host before deployment. The API's `default-src 'none'` Content Security Policy applies only to `/api` responses; do not copy it onto the built React HTML served by the static server or proxy.
+
 Initialization and ordinary seeding preserve existing data. The seed inserts missing products and rejects conflicting identities without partial inserts. `seed --reset` explicitly replaces the catalog and removes dependent shortlist memberships; use it only when discarding that data is intended. Initialization does not migrate incompatible existing schemas.
 
 ## API
