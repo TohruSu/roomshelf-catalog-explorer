@@ -86,8 +86,7 @@ export function CatalogPage() {
         </div>
         <div className="intro-aside">
           <p>
-            Thoughtful shapes. Useful dimensions.
-            <br />
+            Thoughtful shapes. Useful dimensions. <br />
             Explore individual pieces at your own pace.
           </p>
           <span className="intro-line" aria-hidden="true" />

@@ -2,8 +2,9 @@ name: Catalog checks
 
 on:
   push:
-    branches: [main, feat/product-flows]
+    branches: [main]
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -27,6 +28,10 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
       - run: python -m venv .venv
       - run: .venv/bin/python -m pip install --require-hashes -r requirements-dev.txt
+      - run: >-
+          .venv/bin/pip-audit --cache-dir .venv/audit-cache --strict --disable-pip --require-hashes
+          --vulnerability-service pypi --progress-spinner off -r requirements-dev.txt
+      - run: .venv/bin/python ../scripts/check_docs.py
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
       - run: .venv/bin/mypy roomshelf
@@ -50,6 +55,7 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=moderate
       - run: npm run lint
+      - run: npm run format:check
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
