@@ -6,14 +6,18 @@ import { ShortlistPage } from "./pages/ShortlistPage";
 import { CompareTray } from "./components/CompareTray";
 import { CompareProvider, useCompare } from "./state/CompareProvider";
 import { ShortlistProvider, useShortlist } from "./state/ShortlistProvider";
+import { CatalogNavigationProvider } from "./navigation/CatalogNavigationProvider";
+import { usePageNavigation } from "./navigation/usePageNavigation";
 
 export function App() {
   return (
-    <CompareProvider>
-      <ShortlistProvider>
-        <AppLayout />
-      </ShortlistProvider>
-    </CompareProvider>
+    <CatalogNavigationProvider>
+      <CompareProvider>
+        <ShortlistProvider>
+          <AppLayout />
+        </ShortlistProvider>
+      </CompareProvider>
+    </CatalogNavigationProvider>
   );
 }
 
@@ -22,7 +26,17 @@ function AppLayout() {
   const shortlist = useShortlist();
   return (
     <>
-      <a className="skip-link" href="#main-content">
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          const main = document.getElementById("main-content");
+          if (main) {
+            event.preventDefault();
+            main.focus();
+          }
+        }}
+      >
         Skip to content
       </a>
       <header className="site-header">
@@ -54,19 +68,7 @@ function AppLayout() {
         <Route path="/products/:slug" element={<ProductDetailPage />} />
         <Route path="/compare" element={<ComparePage />} />
         <Route path="/shortlist" element={<ShortlistPage />} />
-        <Route
-          path="*"
-          element={
-            <main id="main-content" className="not-found">
-              <p className="eyebrow">404 / Page not found</p>
-              <h1>This page is off the shelf.</h1>
-              <p>Return to the catalog to explore the collection.</p>
-              <Link className="button primary" to="/products">
-                Browse the catalog
-              </Link>
-            </main>
-          }
-        />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
       <CompareTray />
       <footer className="site-footer">
@@ -74,5 +76,19 @@ function AppLayout() {
         <span>Fictional products. Prices in JPY. Dimensions in cm.</span>
       </footer>
     </>
+  );
+}
+
+function NotFoundPage() {
+  usePageNavigation("Page Not Found | RoomShelf");
+  return (
+    <main id="main-content" className="not-found" tabIndex={-1}>
+      <p className="eyebrow">404 / Page not found</p>
+      <h1 tabIndex={-1}>This page is off the shelf.</h1>
+      <p>Return to the catalog to explore the collection.</p>
+      <Link className="button primary" to="/products">
+        Browse the catalog
+      </Link>
+    </main>
   );
 }

@@ -7,11 +7,18 @@ import { ProductActions } from "../components/ProductActions";
 import { ProductVisual } from "../components/ProductVisual";
 import { availabilityLabels, formatPrice } from "../catalog/display";
 import { ShortlistFeedback } from "../components/ShortlistFeedback";
+import { usePageNavigation } from "../navigation/usePageNavigation";
+import {
+  catalogSourceKey,
+  useCatalogNavigation,
+} from "../navigation/catalogNavigation";
+import type { CatalogPosition } from "../navigation/catalogNavigation";
 
 export function ProductDetailPage() {
   const { slug = "" } = useParams();
   const location = useLocation();
   const state: unknown = location.state;
+  const navigation = useCatalogNavigation();
   const from =
     state && typeof state === "object" && "from" in state
       ? state.from
@@ -22,6 +29,8 @@ export function ProductDetailPage() {
       key={slug}
       slug={slug}
       backTo={catalogReturnPath(from)}
+      sourceKey={catalogSourceKey(state)}
+      sourcePosition={navigation.find(catalogSourceKey(state) ?? "")}
     />
   );
 }
@@ -29,9 +38,13 @@ export function ProductDetailPage() {
 function ProductDetailContent({
   slug,
   backTo,
+  sourceKey,
+  sourcePosition,
 }: {
   slug: string;
   backTo: string;
+  sourceKey: string | null;
+  sourcePosition: CatalogPosition | undefined;
 }) {
   const [attempt, setAttempt] = useState(0);
   const request = useRequest<{ data: ProductDetail }>(
@@ -41,14 +54,27 @@ function ProductDetailContent({
   const product = request.data?.data;
   const unknown = request.error?.status === 404;
   const invalid = request.error?.status === 400;
+  usePageNavigation(
+    request.error
+      ? `${unknown ? "Product Not Found" : "Product Unavailable"} | RoomShelf`
+      : product
+        ? `${product.title} | RoomShelf`
+        : "Product Details | RoomShelf",
+    "main",
+  );
+  const returnState =
+    sourcePosition?.path === backTo && sourcePosition.slug === slug
+      ? { catalogSourceKey: sourceKey }
+      : undefined;
 
   return (
     <main
       id="main-content"
       className="collection-main detail-main"
       aria-busy={request.loading}
+      tabIndex={-1}
     >
-      <Link className="back-link" to={backTo}>
+      <Link className="back-link" to={backTo} state={returnState}>
         ← Back to catalog
       </Link>
       <ShortlistFeedback />
@@ -89,7 +115,7 @@ function ProductDetailContent({
             </button>
           )}
           {(unknown || invalid) && (
-            <Link className="button primary" to={backTo}>
+            <Link className="button primary" to={backTo} state={returnState}>
               Browse the catalog
             </Link>
           )}

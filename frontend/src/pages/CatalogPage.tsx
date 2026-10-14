@@ -12,8 +12,11 @@ import type { CatalogQuery, Sort } from "../catalog/query";
 import { FilterPanel } from "../components/FilterPanel";
 import { ProductCard } from "../components/ProductCard";
 import { ShortlistFeedback } from "../components/ShortlistFeedback";
+import { usePageNavigation } from "../navigation/usePageNavigation";
+import { useCatalogPosition } from "../navigation/catalogNavigation";
 
 export function CatalogPage() {
+  usePageNavigation("Catalog | RoomShelf");
   const [searchParams, setSearchParams] = useSearchParams();
   const search = searchParams.toString();
   const parsed = useMemo(
@@ -59,15 +62,23 @@ export function CatalogPage() {
     ).length;
   const retry = () => setAttempt((value) => value + 1);
   const invalidRequest = products.error?.status === 400;
+  useCatalogPosition(
+    parsed.ok &&
+      canonical === search &&
+      !products.loading &&
+      !products.error &&
+      !filters.loading,
+    `/products${canonical ? `?${canonical}` : ""}`,
+  );
 
   return (
-    <main id="main-content" className="catalog-main">
+    <main id="main-content" className="catalog-main" tabIndex={-1}>
       <section className="catalog-intro" aria-labelledby="catalog-title">
         <div>
           <p className="eyebrow">
             <span aria-hidden="true">01</span> / The collection
           </p>
-          <h1 id="catalog-title">
+          <h1 id="catalog-title" tabIndex={-1}>
             Make room
             <br />
             for the everyday<span>.</span>

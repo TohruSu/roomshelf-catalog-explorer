@@ -10,6 +10,11 @@ import {
 import type { CatalogQuery } from "../catalog/query";
 
 const label = (value: string) => value.charAt(0).toUpperCase() + value.slice(1);
+const mobileFiltersQuery = "(max-width: 700px)";
+const initiallyOpen = () =>
+  !(
+    window.matchMedia?.(mobileFiltersQuery).matches ?? window.innerWidth <= 700
+  );
 interface Props {
   query: CatalogQuery;
   filters: Filters | null;
@@ -33,13 +38,32 @@ export function FilterPanel({
   const location = useLocation();
   const navigationType = useNavigationType();
   const disclosure = useRef<HTMLDetailsElement>(null);
+  const [isOpen, setIsOpen] = useState(initiallyOpen);
+  const disclosureChoice = useRef<boolean | null>(null);
   useEffect(() => {
-    const openOnDesktop = () => {
-      if (window.innerWidth > 700 && disclosure.current)
-        disclosure.current.open = true;
+    const updateForViewport = (narrow: boolean) => {
+      if (disclosureChoice.current !== null) return;
+      const focusedElement = document.activeElement;
+      if (
+        narrow &&
+        focusedElement &&
+        disclosure.current
+          ?.querySelector(".filter-body")
+          ?.contains(focusedElement)
+      )
+        return;
+      setIsOpen(!narrow);
     };
-    window.addEventListener("resize", openOnDesktop);
-    return () => window.removeEventListener("resize", openOnDesktop);
+    if (window.matchMedia) {
+      const media = window.matchMedia(mobileFiltersQuery);
+      const handleChange = (event: MediaQueryListEvent) =>
+        updateForViewport(event.matches);
+      media.addEventListener("change", handleChange);
+      return () => media.removeEventListener("change", handleChange);
+    }
+    const handleResize = () => updateForViewport(window.innerWidth <= 700);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
   useEffect(() => {
     setSearch(query.q);
@@ -121,11 +145,34 @@ export function FilterPanel({
   };
   const issueFor = (field: string) =>
     issues.find((issue) => issue.field === field);
+  const activeFilters =
+    query.category.length +
+    query.material.length +
+    (query.q ? 1 : 0) +
+    [query.min_price, query.max_price, query.max_width].filter(
+      (value) => value !== undefined,
+    ).length;
   return (
     <aside className="filter-panel" aria-label="Catalog filters">
-      <details className="filter-disclosure" open ref={disclosure}>
-        <summary>
-          <span>Filters</span>
+      <details
+        className="filter-disclosure"
+        open={isOpen}
+        ref={disclosure}
+        onToggle={(event) => setIsOpen(event.currentTarget.open)}
+      >
+        <summary
+          onClick={() => {
+            disclosureChoice.current = !disclosure.current?.open;
+          }}
+        >
+          <span className="filter-summary-label">
+            <span>Filters</span>
+            <span className="filter-summary-count">
+              {activeFilters
+                ? `${activeFilters} active ${activeFilters === 1 ? "filter" : "filters"}`
+                : "No active filters"}
+            </span>
+          </span>
           <span className="filter-summary-mark" aria-hidden="true">
             ＋
           </span>

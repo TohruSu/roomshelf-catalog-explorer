@@ -6,7 +6,7 @@
   font-weight: 400;
   line-height: 1.5;
   --ink: #2a2926;
-  --muted: #747168;
+  --muted: #6a675e;
   --rust: #a24b32;
   --line: #dedbd3;
   --paper: #f6f4ef;
@@ -60,7 +60,9 @@ button:focus-visible,
 a:focus-visible,
 input:focus-visible,
 select:focus-visible,
-summary:focus-visible {
+summary:focus-visible,
+h1[tabindex="-1"]:focus-visible,
+main[tabindex="-1"]:focus-visible {
   outline: 3px solid var(--rust);
   outline-offset: 4px;
 }
@@ -77,7 +79,7 @@ select {
 }
 
 input::placeholder {
-  color: #7d796f;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -266,7 +268,41 @@ ul {
 }
 
 .filter-disclosure > summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.filter-disclosure > summary::-webkit-details-marker {
   display: none;
+}
+
+.filter-summary-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.filter-summary-count {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.filter-disclosure[open] .filter-summary-mark {
+  transform: rotate(45deg);
+}
+
+.filter-summary-mark {
+  font-size: 22px;
+  font-weight: 400;
+  color: var(--rust);
 }
 
 .filter-heading {
@@ -516,11 +552,6 @@ ul {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 34px 22px;
-  transition: opacity 0.15s;
-}
-
-.results-updating {
-  opacity: 0.55;
 }
 
 .product-card {
@@ -653,10 +684,14 @@ ul {
   margin: 16px 0 20px;
 }
 
-.collection-intro > p:last-child {
+.collection-intro > p:not(.eyebrow) {
   color: var(--muted);
   font-size: 13px;
   max-width: 600px;
+}
+
+.collection-intro > p:not(.eyebrow) + p {
+  margin-top: 8px;
 }
 
 .collection-status {
@@ -1234,24 +1269,8 @@ ul {
     border-bottom: 1px solid var(--line);
   }
   .filter-disclosure > summary {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
     min-height: 52px;
-    font-size: 12px;
-    font-weight: 600;
-    list-style: none;
-  }
-  .filter-disclosure > summary::-webkit-details-marker {
-    display: none;
-  }
-  .filter-disclosure[open] .filter-summary-mark {
-    transform: rotate(45deg);
-  }
-  .filter-summary-mark {
-    font-size: 22px;
-    font-weight: 400;
-    color: var(--rust);
+    margin-bottom: 0;
   }
   .filter-body {
     padding: 12px 0 26px;

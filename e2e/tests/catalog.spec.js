@@ -175,6 +175,7 @@ test('mobile search works from the keyboard without document overflow', async ({
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/products');
   await expect(page.getByText('144 products', { exact: true })).toBeVisible();
+  await page.locator('.filter-disclosure > summary').click();
   const search = page.getByLabel('Search furniture', { exact: true });
   await search.focus();
   await page.keyboard.type('chair');
